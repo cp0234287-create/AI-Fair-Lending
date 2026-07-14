@@ -402,3 +402,41 @@ def _register_dataset(df: pd.DataFrame, dataset_id: str, field_map: Optional[Dic
     Path(Config.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
     df.to_csv(save_path, index=False)
     logger.info(f"Registered dataset {dataset_id} → {save_path}")
+
+
+@router.get("/recent-audits")
+async def get_recent_audits(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 20,
+):
+    """Return recent fairness audits with dataset filenames for the monitoring dashboard."""
+    try:
+        from backend.database.models import FairnessAudit, Dataset
+        from sqlalchemy import select, join
+        from sqlalchemy.orm import aliased
+
+        # Join audits with datasets to get filenames
+        q = (
+            select(FairnessAudit, Dataset.filename, Dataset.file_id)
+            .join(Dataset, FairnessAudit.dataset_id == Dataset.id, isouter=True)
+            .order_by(FairnessAudit.created_at.desc())
+            .limit(limit)
+        )
+        rows = await db.execute(q)
+        results = []
+        for audit, filename, file_id in rows:
+            results.append({
+                "id": audit.id,
+                "dataset_id": str(audit.dataset_id),
+                "dataset_filename": filename or "Unknown",
+                "file_id": file_id,
+                "fairness_score": audit.fairness_score,
+                "disparate_impact_ratios": audit.disparate_impact_ratios or {},
+                "bias_indicators": audit.bias_indicators or [],
+                "findings": audit.findings or [],
+                "created_at": audit.created_at.isoformat() if audit.created_at else None,
+            })
+        return {"audits": results, "total": len(results)}
+    except Exception as e:
+        logger.warning(f"Failed to fetch recent audits: {e}")
+        return {"audits": [], "total": 0}
